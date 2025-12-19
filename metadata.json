@@ -1,0 +1,5 @@
+{
+  "name": "CursorCut AI",
+  "description": "An intelligent video editor with Gemini-powered narrative understanding, retake grouping, and automated rough cuts.",
+  "requestFramePermissions": []
+}
