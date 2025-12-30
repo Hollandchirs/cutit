@@ -54,20 +54,41 @@ const Player: React.FC<PlayerProps> = ({
   );
 };
 // Revamping Player to be simpler: Just a wrapper for the video element controlled by App
-export const VideoDisplay = React.forwardRef<HTMLVideoElement, { src?: string; poster?: string }>(({ src, poster }, ref) => {
+interface VideoDisplayProps {
+    src?: string;
+    poster?: string;
+    onUpload?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+}
+
+export const VideoDisplay = React.forwardRef<HTMLVideoElement, VideoDisplayProps>(({ src, poster, onUpload }, ref) => {
     return (
         <div className="w-full h-full bg-black flex items-center justify-center">
             {src ? (
-                <video 
+                <video
                     ref={ref}
                     className="max-h-full max-w-full shadow-2xl"
                     src={src}
                     poster={poster}
                 />
             ) : (
-                 <div className="text-zinc-600 flex flex-col items-center">
-                    <p>Preview Area</p>
-                </div>
+                <label className="cursor-pointer flex flex-col items-center justify-center w-full h-full">
+                    <input
+                        type="file"
+                        multiple
+                        accept="video/*"
+                        onChange={onUpload}
+                        className="hidden"
+                    />
+                    <div className="flex flex-col items-center space-y-4 p-8 border-2 border-dashed border-zinc-700 rounded-xl hover:border-zinc-500 hover:bg-zinc-900/30 transition-all">
+                        <svg className="w-12 h-12 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                        </svg>
+                        <div className="text-center">
+                            <p className="text-zinc-400 font-medium">Drop files to Import</p>
+                            <p className="text-zinc-600 text-sm mt-1">or click to browse</p>
+                        </div>
+                    </div>
+                </label>
             )}
         </div>
     )

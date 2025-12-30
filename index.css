@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+@theme {
+    --font-sans: 'Inter', system-ui, sans-serif;
+}
+
+body {
+    @apply bg-zinc-950 text-zinc-100 antialiased;
+}

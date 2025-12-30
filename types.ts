@@ -23,9 +23,14 @@ export interface VideoClip {
   url: string;
   name: string;
   duration: number;
-  status: 'idle' | 'analyzing' | 'done' | 'error';
+  status: 'loading' | 'ready' | 'analyzing' | 'done' | 'error';
   analysis?: ClipAnalysis;
   color?: string; // Assigned color for the group
+}
+
+export interface AnalysisProgress {
+  percent: number;
+  message: string;
 }
 
 export interface TimelineSegment {

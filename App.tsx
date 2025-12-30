@@ -3,7 +3,7 @@ import MediaPool from './components/MediaPool';
 import Timeline from './components/Timeline';
 import { VideoDisplay } from './components/Player';
 import Button from './components/Button';
-import { VideoClip, ProcessingStatus, TimelineSegment } from './types';
+import { VideoClip, ProcessingStatus, TimelineSegment, AnalysisProgress } from './types';
 import { analyzeClipsWithGemini } from './services/geminiService';
 import { GROUP_COLORS } from './constants';
 import { useTimelineHistory } from './hooks/useTimelineHistory';
@@ -16,6 +16,7 @@ export default function App() {
   const [clips, setClips] = useState<VideoClip[]>([]);
   const [status, setStatus] = useState<ProcessingStatus>(ProcessingStatus.IDLE);
   const [previewClipId, setPreviewClipId] = useState<string | null>(null); // For raw media pool preview
+  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ percent: 0, message: '' });
   
   // Timeline State managed by History Hook
   const { 
@@ -103,7 +104,7 @@ export default function App() {
           url: URL.createObjectURL(file),
           name: file.name,
           duration: 0,
-          status: 'idle'
+          status: 'loading' as const
         };
       });
       setClips(prev => [...prev, ...newClips]);
@@ -112,23 +113,53 @@ export default function App() {
 
   useEffect(() => {
     clips.forEach(clip => {
-      if (clip.duration === 0) {
+      if (clip.status === 'loading' && clip.duration === 0) {
         const video = document.createElement('video');
         video.preload = 'metadata';
         video.onloadedmetadata = () => {
-          setClips(prev => prev.map(c => c.id === clip.id ? { ...c, duration: video.duration } : c));
+          setClips(prev => prev.map(c => c.id === clip.id ? { ...c, duration: video.duration, status: 'ready' as const } : c));
+        };
+        video.onerror = () => {
+          setClips(prev => prev.map(c => c.id === clip.id ? { ...c, status: 'error' as const } : c));
         };
         video.src = clip.url;
       }
     });
   }, [clips]);
 
+  // Check if all clips are ready (not loading)
+  const allClipsReady = clips.length > 0 && clips.every(clip => clip.status !== 'loading');
+
   const handleAnalyze = async () => {
     if (clips.length === 0) return;
     setStatus(ProcessingStatus.ANALYZING);
+    setAnalysisProgress({ percent: 0, message: 'Preparing videos...' });
+
+    // Progress callback from service - show actual stage info
+    const stages: Record<string, number> = {
+      'Uploading': 20,
+      'Waiting': 40,
+      'File status': 50,
+      'AI analyzing': 70,
+      'Encoding': 30,
+    };
+
+    const updateProgress = (message: string) => {
+      // Find matching stage for percent estimate
+      let percent = 10;
+      for (const [key, value] of Object.entries(stages)) {
+        if (message.includes(key)) {
+          percent = value;
+          break;
+        }
+      }
+      setAnalysisProgress({ percent, message });
+    };
 
     try {
-      const analyses = await analyzeClipsWithGemini(clips);
+      const analyses = await analyzeClipsWithGemini(clips, updateProgress);
+      setAnalysisProgress({ percent: 95, message: 'Building timeline...' });
+
       const groupColors: Record<string, string> = {};
       let colorIndex = 0;
 
@@ -153,27 +184,33 @@ export default function App() {
 
       setClips(updatedClips);
 
-      // Auto-Cut Logic: 
-      // 1. Keep ALL segments (don't filter bad takes)
-      // 2. Add Padding (0.5s) to start/end
+      // Auto-Cut Logic:
+      // Keep ALL segments with exact timestamps (no padding to avoid overlap)
       const newSegments: TimelineSegment[] = [];
-      const padding = 0.5; // Seconds to preserve breath/context
+
+      console.log('\n=== Building Timeline ===');
+      console.log(`Clips with analysis: ${updatedClips.filter(c => c.analysis).length}/${updatedClips.length}`);
 
       updatedClips.forEach(clip => {
-          if (!clip.analysis) return;
-          
-          // Sort by start time to maintain recording order
+          if (!clip.analysis) {
+              console.log(`⚠️ Clip "${clip.name}" (id=${clip.id}) has NO analysis`);
+              return;
+          }
+
+          console.log(`\n📹 Clip: ${clip.name}`);
+          console.log(`   ID: ${clip.id}`);
+          console.log(`   Duration: ${clip.duration}s`);
+          console.log(`   Segments: ${clip.analysis.segments.length}`);
+
           const sortedSegments = [...clip.analysis.segments].sort((a, b) => a.start - b.start);
 
-          sortedSegments.forEach(seg => {
-              // Calculate padded times, clamped to clip boundaries
-              const paddedStart = Math.max(0, seg.start - padding);
-              const paddedEnd = Math.min(clip.duration || 100000, seg.end + padding);
+          sortedSegments.forEach((seg, idx) => {
+              console.log(`   [${idx}] ${seg.start.toFixed(1)}s-${seg.end.toFixed(1)}s | group=${seg.groupId} | best=${seg.isBest} | "${seg.text.substring(0, 30)}..."`);
 
               newSegments.push({
                   id: generateId(),
                   clipId: clip.id,
-                  range: { start: paddedStart, end: paddedEnd },
+                  range: { start: seg.start, end: seg.end },
                   isBest: seg.isBest,
                   score: seg.score,
                   color: groupColors[seg.groupId] || '#ccc',
@@ -183,12 +220,19 @@ export default function App() {
           });
       });
 
+      const totalDur = newSegments.reduce((acc, s) => acc + (s.range.end - s.range.start), 0);
+      console.log(`\n=== Timeline Result ===`);
+      console.log(`Total segments: ${newSegments.length}`);
+      console.log(`Total duration: ${totalDur.toFixed(1)}s`);
+
       setTimelineSegments(newSegments);
+      setAnalysisProgress({ percent: 100, message: 'Complete!' });
       setStatus(ProcessingStatus.COMPLETED);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setAnalysisProgress({ percent: 0, message: '' });
       setStatus(ProcessingStatus.ERROR);
-      alert("Analysis failed.");
+      alert("Analysis failed: " + (err?.message || err));
     }
   };
 
@@ -342,11 +386,13 @@ export default function App() {
       <div className="flex-1 flex overflow-hidden">
          
          {/* Sidebar: Media Pool */}
-         <MediaPool 
+         <MediaPool
             clips={clips}
             onUpload={handleUpload}
             onAnalyze={handleAnalyze}
             isProcessing={status === ProcessingStatus.ANALYZING}
+            allClipsReady={allClipsReady}
+            analysisProgress={analysisProgress}
             selectedClipId={previewClipId}
             onSelectClip={(id) => {
                 setPreviewClipId(id);
@@ -360,19 +406,24 @@ export default function App() {
             {/* Viewer Stage */}
             <div className="flex-1 flex items-center justify-center p-4 relative" onClick={() => setPreviewClipId(null)}>
                 <div className="aspect-video w-full max-w-4xl max-h-full bg-black shadow-2xl ring-1 ring-zinc-800 rounded-lg overflow-hidden relative group">
-                   <VideoDisplay ref={videoRef} src={activeClip?.url} />
+                   <VideoDisplay ref={videoRef} src={activeClip?.url} onUpload={handleUpload} />
                    
                    {/* Info Overlay */}
-                   {activeClip?.analysis && !previewClipId && timelineData?.segment.transcript && (
-                       <div className="absolute top-4 left-4 max-w-xs pointer-events-none">
+                   {activeClip?.analysis && !previewClipId && timelineData?.segment && (
+                       <div className="absolute top-4 left-4 max-w-md pointer-events-none">
                            <div className="backdrop-blur-md bg-black/60 border border-white/10 rounded-lg p-3 shadow-lg">
                                <div className="flex items-center gap-2 mb-1">
                                    <div className="w-2 h-2 rounded-full animate-pulse" style={{background: timelineData.segment.color}}></div>
                                    <span className="text-[10px] font-bold text-zinc-300 uppercase tracking-wider">AI Transcript</span>
+                                   <span className="text-[9px] text-zinc-500 ml-auto">
+                                     Source: {timelineData.segment.range.start.toFixed(1)}s - {timelineData.segment.range.end.toFixed(1)}s
+                                   </span>
                                </div>
-                               <p className="text-sm text-white font-medium leading-relaxed">
-                                   "{timelineData.segment.transcript}"
-                               </p>
+                               {timelineData.segment.transcript && (
+                                 <p className="text-sm text-white font-medium leading-relaxed">
+                                     "{timelineData.segment.transcript}"
+                                 </p>
+                               )}
                            </div>
                        </div>
                    )}
