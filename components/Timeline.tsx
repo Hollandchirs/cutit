@@ -254,7 +254,7 @@ const Timeline: React.FC<TimelineProps> = ({
                     e.stopPropagation();
                     if (!dragState) onSelectSegment(seg.id);
                   }}
-                  title={`${seg.name} (Score: ${seg.score})`}
+                  title={seg.name}
                 >
                     {/* Left Resize Handle */}
                     <div
@@ -269,26 +269,12 @@ const Timeline: React.FC<TimelineProps> = ({
                     />
 
                     {/* Content */}
-                    <div className="p-2 h-full flex flex-col justify-between relative pointer-events-none">
+                    <div className="p-2 h-full flex flex-col justify-start relative pointer-events-none">
                         <div className="absolute inset-0 opacity-10 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNCIgaGVpZ2h0PSI0IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxwYXRoIGQ9Ik0wIDNoNHYxSDB6IiBmaWxsPSIjMDAwIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiLz48L3N2Zz4=')]"></div>
 
-                        <div className="flex justify-between items-start z-10 gap-1">
-                             <span className="text-[10px] text-white/90 truncate font-medium drop-shadow-md">
-                                {seg.name}
-                            </span>
-                            <span className={`
-                                text-[9px] px-1 rounded font-mono
-                                ${seg.score >= 90 ? 'bg-green-500/80 text-white' : 'bg-black/40 text-zinc-300'}
-                            `}>
-                                {seg.score}
-                            </span>
-                        </div>
-
-                        {seg.isBest && (
-                            <div className="self-end text-yellow-300 text-[10px] drop-shadow-md z-10 font-bold bg-black/40 px-1 rounded-sm border border-yellow-500/30">
-                                ★ BEST
-                            </div>
-                        )}
+                        <span className="text-[10px] text-white/90 truncate font-medium drop-shadow-md z-10">
+                            {seg.name}
+                        </span>
                     </div>
                 </div>
               ))}
