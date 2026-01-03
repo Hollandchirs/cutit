@@ -55,11 +55,36 @@ export default function App() {
 
   // --- Handlers: Editing ---
 
-  const handleDelete = useCallback(() => {
-    if (!selectedSegmentId) return;
-    setTimelineSegments(prev => prev.filter(seg => seg.id !== selectedSegmentId));
-    setSelectedSegmentId(null);
+  const handleDelete = useCallback((id?: string) => {
+    const targetId = id || selectedSegmentId;
+    if (!targetId) return;
+    setTimelineSegments(prev => prev.filter(seg => seg.id !== targetId));
+    if (targetId === selectedSegmentId) {
+      setSelectedSegmentId(null);
+    }
   }, [selectedSegmentId, setTimelineSegments]);
+
+  // Reorder segments (drag & drop)
+  const handleReorderSegments = useCallback((fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
+    setTimelineSegments(prev => {
+      const result = [...prev];
+      const [removed] = result.splice(fromIndex, 1);
+      // Adjust target index if moving forward
+      const adjustedToIndex = fromIndex < toIndex ? toIndex - 1 : toIndex;
+      result.splice(adjustedToIndex, 0, removed);
+      return result;
+    });
+  }, [setTimelineSegments]);
+
+  // Resize segment (trim start/end)
+  const handleResizeSegment = useCallback((id: string, newStart: number, newEnd: number) => {
+    setTimelineSegments(prev => prev.map(seg =>
+      seg.id === id
+        ? { ...seg, range: { start: newStart, end: newEnd } }
+        : seg
+    ));
+  }, [setTimelineSegments]);
 
   const handleSplit = useCallback(() => {
     // 1. Find segment under playhead
@@ -431,16 +456,24 @@ export default function App() {
          {/* Sidebar: Media Pool */}
          <MediaPool
             clips={clips}
+            segments={timelineSegments}
             onUpload={handleUpload}
             onAnalyze={handleAnalyze}
             isProcessing={status === ProcessingStatus.ANALYZING}
             allClipsReady={allClipsReady}
             analysisProgress={analysisProgress}
             selectedClipId={previewClipId}
+            selectedSegmentId={selectedSegmentId}
             onSelectClip={(id) => {
                 setPreviewClipId(id);
                 setIsPlaying(false);
             }}
+            onSelectSegment={(id) => {
+                setSelectedSegmentId(id);
+                setPreviewClipId(null);
+            }}
+            onDeleteSegment={handleDelete}
+            onReorderSegments={handleReorderSegments}
          />
 
          {/* Center: Stage & Timeline */}
@@ -451,25 +484,6 @@ export default function App() {
                 <div className="aspect-video w-full max-w-4xl max-h-full bg-black shadow-2xl ring-1 ring-zinc-800 rounded-lg overflow-hidden relative group">
                    <VideoDisplay ref={videoRef} src={activeClip?.url} onUpload={handleUpload} />
                    
-                   {/* Info Overlay */}
-                   {activeClip?.analysis && !previewClipId && timelineData?.segment && (
-                       <div className="absolute top-4 left-4 max-w-md pointer-events-none">
-                           <div className="backdrop-blur-md bg-black/60 border border-white/10 rounded-lg p-3 shadow-lg">
-                               <div className="flex items-center gap-2 mb-1">
-                                   <div className="w-2 h-2 rounded-full animate-pulse" style={{background: timelineData.segment.color}}></div>
-                                   <span className="text-[10px] font-bold text-zinc-300 uppercase tracking-wider">AI Transcript</span>
-                                   <span className="text-[9px] text-zinc-500 ml-auto">
-                                     Source: {timelineData.segment.range.start.toFixed(1)}s - {timelineData.segment.range.end.toFixed(1)}s
-                                   </span>
-                               </div>
-                               {timelineData.segment.transcript && (
-                                 <p className="text-sm text-white font-medium leading-relaxed">
-                                     "{timelineData.segment.transcript}"
-                                 </p>
-                               )}
-                           </div>
-                       </div>
-                   )}
                    
                    {/* Preview Indicator */}
                    {previewClipId && (
@@ -559,7 +573,7 @@ export default function App() {
             </div>
 
             {/* Timeline Area */}
-            <Timeline 
+            <Timeline
                 segments={timelineSegments}
                 currentTime={timelineTime}
                 totalDuration={totalDuration || 60}
@@ -573,6 +587,8 @@ export default function App() {
                     setSelectedSegmentId(id);
                     setPreviewClipId(null); // Switch to timeline mode on select
                 }}
+                onReorderSegments={handleReorderSegments}
+                onResizeSegment={handleResizeSegment}
             />
          </div>
       </div>
