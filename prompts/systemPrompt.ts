@@ -74,5 +74,43 @@ export const buildSystemPrompt = (duration: number): string => {
 □ 没有时间空缺
 □ 重复内容有相同groupId，每组只有一个isBest=true
 
+## Case Examples
+
+### Case 1: 开头重录
+视频: 0-3s "大家好，我是...呃..." → 3-8s "大家好，我是小明，今天介绍AI工具"
+输出:
+- {"text": "大家好，我是...呃...", "start": 0, "end": 3, "groupId": "g1", "score": 40, "isBest": false}
+- {"text": "大家好，我是小明，今天介绍AI工具", "start": 3, "end": 8, "groupId": "g1", "score": 90, "isBest": true}
+判断: 两句开头相同"大家好，我是" → 重录 → 同groupId
+
+### Case 2: 中间卡顿重录
+视频: 10-13s "这个功能可以帮助..." → 13-18s "这个功能可以帮助用户快速生成海报"
+输出:
+- {"text": "这个功能可以帮助...", "start": 10, "end": 13, "groupId": "g2", "score": 50, "isBest": false}
+- {"text": "这个功能可以帮助用户快速生成海报", "start": 13, "end": 18, "groupId": "g2", "score": 85, "isBest": true}
+判断: 两句开头相同"这个功能可以帮助" → 重录 → 同groupId
+
+### Case 3: 正常连续内容（不是重录）
+视频: 20-25s "首先我们来看界面设计" → 25-30s "然后是核心功能介绍"
+输出:
+- {"text": "首先我们来看界面设计", "start": 20, "end": 25, "groupId": "g3", "score": 90, "isBest": true}
+- {"text": "然后是核心功能介绍", "start": 25, "end": 30, "groupId": "g4", "score": 90, "isBest": true}
+判断: "首先..."和"然后..."内容不同 → 不是重录 → 不同groupId
+
+### Case 4: 同一句话说了3次
+视频: 30-33s "那么这个..." → 33-36s "那么这个产品..." → 36-42s "那么这个产品的核心优势是什么呢"
+输出:
+- {"text": "那么这个...", "start": 30, "end": 33, "groupId": "g5", "score": 30, "isBest": false}
+- {"text": "那么这个产品...", "start": 33, "end": 36, "groupId": "g5", "score": 50, "isBest": false}
+- {"text": "那么这个产品的核心优势是什么呢", "start": 36, "end": 42, "groupId": "g5", "score": 90, "isBest": true}
+判断: 三句都以"那么这个"开头 → 3次重录 → 同groupId，只有最完整的isBest=true
+
+### Case 5: 相似主题但不同内容
+视频: 50-55s "AI可以生成海报" → 55-60s "AI还可以生成视频"
+输出:
+- {"text": "AI可以生成海报", "start": 50, "end": 55, "groupId": "g6", "score": 85, "isBest": true}
+- {"text": "AI还可以生成视频", "start": 55, "end": 60, "groupId": "g7", "score": 85, "isBest": true}
+判断: "生成海报"和"生成视频"是不同功能 → 不是重录 → 不同groupId
+
 请输出有效的JSON。`;
 };

@@ -115,25 +115,20 @@ const enforceOneBestPerGroup = (segments: AnalyzedSegment[]): AnalyzedSegment[] 
   return segments;
 };
 
-// Validate and fix segments
+// Validate and fix overlaps only (keep original timestamps)
 const validateSegments = (segments: any[], duration: number): AnalyzedSegment[] => {
   const validSegments: AnalyzedSegment[] = [];
 
+  // Step 1: Parse segments
   for (const seg of segments) {
     let start = Number(seg.start) || 0;
     let end = Number(seg.end) || 0;
 
-    if (start > end) {
-      [start, end] = [end, start];
-    }
-
+    if (start > end) [start, end] = [end, start];
     start = Math.max(0, Math.min(start, duration));
     end = Math.max(start + 0.1, Math.min(end, duration));
 
-    if (end - start < 0.1) {
-      console.warn(`Skipping invalid segment: ${start}-${end}`);
-      continue;
-    }
+    if (end - start < 0.1) continue;
 
     validSegments.push({
       text: seg.text || '',
@@ -145,7 +140,21 @@ const validateSegments = (segments: any[], duration: number): AnalyzedSegment[] 
     });
   }
 
+  // Sort by start time
   validSegments.sort((a, b) => a.start - b.start);
+
+  // Step 2: Fix overlaps only - adjust boundaries to make adjacent
+  for (let i = 1; i < validSegments.length; i++) {
+    const prev = validSegments[i - 1];
+    const curr = validSegments[i];
+
+    if (curr.start < prev.end) {
+      // Overlap: use current segment's start as the boundary
+      prev.end = curr.start;
+      console.log(`[Fix] Overlap: seg ${i-1} end adjusted to ${curr.start.toFixed(1)}s`);
+    }
+  }
+
   return validSegments;
 };
 

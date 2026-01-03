@@ -5,6 +5,7 @@ import { VideoDisplay } from './components/Player';
 import Button from './components/Button';
 import { VideoClip, ProcessingStatus, TimelineSegment, AnalysisProgress } from './types';
 import { analyzeClipsWithGemini } from './services/geminiService';
+import { exportVideo, downloadBlob, ExportProgress } from './services/exportService';
 import { GROUP_COLORS } from './constants';
 import { useTimelineHistory } from './hooks/useTimelineHistory';
 
@@ -17,6 +18,8 @@ export default function App() {
   const [status, setStatus] = useState<ProcessingStatus>(ProcessingStatus.IDLE);
   const [previewClipId, setPreviewClipId] = useState<string | null>(null); // For raw media pool preview
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ percent: 0, message: '' });
+  const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   
   // Timeline State managed by History Hook
   const { 
@@ -236,6 +239,38 @@ export default function App() {
     }
   };
 
+  // Handle Export
+  const handleExport = async () => {
+    if (timelineSegments.length === 0) {
+      alert('No segments to export. Please analyze videos first.');
+      return;
+    }
+
+    setIsExporting(true);
+    setExportProgress({ stage: 'preparing', message: 'Preparing export...', percent: 0 });
+
+    try {
+      const blob = await exportVideo(clips, timelineSegments, setExportProgress);
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '');
+      downloadBlob(blob, `export_${timestamp}.mp4`);
+
+      setExportProgress({ stage: 'done', message: 'Export complete!', percent: 100 });
+
+      // Clear progress after delay
+      setTimeout(() => {
+        setExportProgress(null);
+        setIsExporting(false);
+      }, 2000);
+
+    } catch (err: any) {
+      console.error('Export failed:', err);
+      setExportProgress({ stage: 'error', message: err.message || 'Export failed', percent: 0 });
+      setIsExporting(false);
+    }
+  };
+
   // Toggle Play Logic
   const togglePlay = useCallback(() => {
     if (isPlaying) {
@@ -378,7 +413,15 @@ export default function App() {
              <h1 className="font-bold text-sm tracking-wide text-zinc-100">CursorCut AI</h1>
          </div>
          <div className="flex items-center gap-2">
-             <Button variant="secondary" size="sm" className="text-xs">Export Video</Button>
+             <Button
+               variant="secondary"
+               size="sm"
+               className="text-xs"
+               onClick={handleExport}
+               disabled={isExporting || timelineSegments.length === 0}
+             >
+               {isExporting ? (exportProgress?.message || 'Exporting...') : 'Export Video'}
+             </Button>
          </div>
       </header>
 
