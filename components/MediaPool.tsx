@@ -17,6 +17,11 @@ interface MediaPoolProps {
   onSelectSegment: (id: string | null) => void;
   onDeleteSegment: (id: string) => void;
   onReorderSegments: (fromIndex: number, toIndex: number) => void;
+  onSeek?: (time: number) => void;
+  onCutWords?: (segmentId: string, cutStart: number, cutEnd: number) => void;
+  onToggleMute?: (id: string) => void;
+  currentTime?: number;
+  isPlaying?: boolean;
 }
 
 type TabType = 'files' | 'transcript';
@@ -34,7 +39,12 @@ const MediaPool: React.FC<MediaPoolProps> = ({
   onSelectClip,
   onSelectSegment,
   onDeleteSegment,
-  onReorderSegments
+  onReorderSegments,
+  onSeek,
+  onCutWords,
+  onToggleMute,
+  currentTime = 0,
+  isPlaying = false
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>('files');
 
@@ -142,6 +152,11 @@ const MediaPool: React.FC<MediaPoolProps> = ({
           onSelectSegment={onSelectSegment}
           onDeleteSegment={onDeleteSegment}
           onReorderSegments={onReorderSegments}
+          onSeek={onSeek}
+          onCutWords={onCutWords}
+          onToggleMute={onToggleMute}
+          currentTime={currentTime}
+          isPlaying={isPlaying}
         />
       )}
 

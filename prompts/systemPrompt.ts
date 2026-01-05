@@ -21,11 +21,18 @@ export const buildSystemPrompt = (duration: number): string => {
 - ✅ **完整覆盖**: 第一个片段从0秒开始，最后一个片段到${duration.toFixed(0)}秒结束
 - ✅ **无空缺**: 不能有 0-5s, 10-15s 这样的空缺（中间5-10s丢失了）
 
-### 如何裁剪:
+### 如何裁剪 (精确到字/词):
 - 按自然句子/语义单元分割
 - 一句完整的话 = 一个片段
-- 静音部分: 如果超过2秒的静音，单独作为一个片段，text写"[静音]"
-- 短暂停顿(<2秒): 包含在当前片段内，不要单独分割
+- **⚠️ 关键精度要求**:
+  - segment.start 必须 = 第一个word的start时间（说话开始的精确时刻）
+  - segment.end 必须 = 最后一个word的end时间（说话结束的精确时刻）
+  - 不要在segment开头/结尾添加任何静音padding！
+- **静音处理**:
+  - 超过0.5秒的静音必须单独作为一个segment，text写"[静音]"
+  - 静音segment不需要words数组
+  - 语句之间的静音不要合并到语句segment里
+- **短暂停顿(<0.5秒)**: 可以包含在当前片段内
 
 ### 裁剪示例:
 假设视频内容是: "大家好...(停顿)...我是小明，今天...(3秒静音)...今天我们来讲AI"
@@ -54,15 +61,43 @@ export const buildSystemPrompt = (duration: number): string => {
 
 ## 输出格式
 
+每个segment必须包含words数组，精确到每个字/词的时间戳：
+
 {
   "summary": "视频内容简述",
   "segments": [
-    {"text": "大家好", "start": 0, "end": 5, "groupId": "g1", "score": 85, "isBest": true},
-    {"text": "我是小明", "start": 5, "end": 10, "groupId": "g2", "score": 90, "isBest": true},
-    {"text": "[静音]", "start": 10, "end": 13, "groupId": "silence_1", "score": 0, "isBest": false},
+    {
+      "text": "大家好",
+      "start": 0,
+      "end": 1.5,
+      "groupId": "g1",
+      "score": 85,
+      "isBest": true,
+      "words": [
+        {"word": "大", "start": 0.2, "end": 0.4},
+        {"word": "家", "start": 0.4, "end": 0.6},
+        {"word": "好", "start": 0.6, "end": 1.0}
+      ]
+    },
     ...
   ]
 }
+
+### words数组规则 (极其重要!):
+- **每个字/词都必须有精确的start和end时间（秒）**
+- 中文: 按单个汉字分割（每个汉字一个word对象）
+- 英文: 按单词分割（空格分隔）
+- 标点符号: 附加到前一个字/词，不单独分割
+- **时间精度要求**:
+  - words的时间必须精确到说话的实际时刻
+  - 第一个word的start = 说话开始的精确时刻（不是segment开始）
+  - 最后一个word的end = 说话结束的精确时刻（不是segment结束）
+  - 相邻word之间: word[n].end ≈ word[n+1].start（允许小间隙）
+- **禁止事项**:
+  - ❌ 不要估算时间（如均匀分配）
+  - ❌ 不要在word时间里包含静音
+  - ❌ word.start不能早于实际发音开始
+  - ❌ word.end不能晚于实际发音结束
 
 ## 输出前检查
 
@@ -74,14 +109,48 @@ export const buildSystemPrompt = (duration: number): string => {
 □ 没有时间空缺
 □ 重复内容有相同groupId，每组只有一个isBest=true
 
+### Words时间戳检查 (必须!):
+□ 每个segment都有words数组（静音segment除外）
+□ words数组的字符拼接 = segment的text
+□ 每个word的start和end都是精确的发音时刻
+□ segment.start = 第一个word.start（精确对齐）
+□ segment.end = 最后一个word.end（精确对齐）
+□ word时间不包含静音padding
+
 ## Case Examples
 
-### Case 1: 开头重录
+### Case 1: 开头重录（带words时间戳）
 视频: 0-3s "大家好，我是...呃..." → 3-8s "大家好，我是小明，今天介绍AI工具"
 输出:
-- {"text": "大家好，我是...呃...", "start": 0, "end": 3, "groupId": "g1", "score": 40, "isBest": false}
-- {"text": "大家好，我是小明，今天介绍AI工具", "start": 3, "end": 8, "groupId": "g1", "score": 90, "isBest": true}
+- {
+    "text": "大家好，我是...呃...",
+    "start": 0.2,  // 注意: 不是0！是第一个字"大"开始的时刻
+    "end": 2.8,    // 最后一个字"呃"结束的时刻
+    "groupId": "g1", "score": 40, "isBest": false,
+    "words": [
+      {"word": "大", "start": 0.2, "end": 0.4},
+      {"word": "家", "start": 0.4, "end": 0.6},
+      {"word": "好", "start": 0.6, "end": 0.9},
+      {"word": "我", "start": 1.2, "end": 1.4},
+      {"word": "是", "start": 1.4, "end": 1.7},
+      {"word": "呃", "start": 2.3, "end": 2.8}
+    ]
+  }
+- {"text": "[静音]", "start": 2.8, "end": 3.1, "groupId": "silence_1", "score": 0, "isBest": false, "words": []}
+- {
+    "text": "大家好，我是小明，今天介绍AI工具",
+    "start": 3.1,  // 第一个字"大"开始的时刻
+    "end": 7.8,    // 最后一个字"具"结束的时刻
+    "groupId": "g1", "score": 90, "isBest": true,
+    "words": [
+      {"word": "大", "start": 3.1, "end": 3.3},
+      {"word": "家", "start": 3.3, "end": 3.5},
+      // ... 每个字都有精确时间
+      {"word": "具", "start": 7.5, "end": 7.8}
+    ]
+  }
 判断: 两句开头相同"大家好，我是" → 重录 → 同groupId
+关键: segment.start/end 精确对齐到 words 的首尾时间!
 
 ### Case 2: 中间卡顿重录
 视频: 10-13s "这个功能可以帮助..." → 13-18s "这个功能可以帮助用户快速生成海报"

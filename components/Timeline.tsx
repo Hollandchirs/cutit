@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState, useCallback } from 'react';
+import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { TimelineSegment } from '../types';
 
 interface TimelineProps {
@@ -10,8 +10,14 @@ interface TimelineProps {
   onSeek: (time: number) => void;
   onSelectSegment: (id: string | null) => void;
   onReorderSegments: (fromIndex: number, toIndex: number) => void;
+  onResizeStart: () => void;
   onResizeSegment: (id: string, newStart: number, newEnd: number) => void;
+  onResizeEnd: () => void;
+  onToggleMute?: (id: string) => void;
 }
+
+// Minimum pixel movement before resize triggers
+const MIN_RESIZE_DELTA = 3;
 
 const Timeline: React.FC<TimelineProps> = ({
   segments,
@@ -22,7 +28,10 @@ const Timeline: React.FC<TimelineProps> = ({
   onSeek,
   onSelectSegment,
   onReorderSegments,
-  onResizeSegment
+  onResizeStart,
+  onResizeSegment,
+  onResizeEnd,
+  onToggleMute
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dragState, setDragState] = useState<{
@@ -32,30 +41,144 @@ const Timeline: React.FC<TimelineProps> = ({
     originalLeft: number;
     originalWidth: number;
     segmentIndex: number;
+    resizeCommitted: boolean; // true once actual resize has begun
+    originalStart: number;
+    originalEnd: number;
   } | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
 
-  // Calculate segment positions
+  // Calculate segment positions - split segments with cuts into visual slices
   const renderedSegments = useMemo(() => {
-    let currentStart = 0;
-    return segments.map((seg, index) => {
-      const duration = seg.range.end - seg.range.start;
-      const width = Math.max(duration * zoomLevel, 20);
-      const left = currentStart * zoomLevel;
-      currentStart += duration;
+    let currentLeft = 0;
+    const result: Array<{
+      id: string;
+      segmentId: string;
+      clipId: string;
+      left: number;
+      width: number;
+      index: number;
+      duration: number;
+      range: { start: number; end: number };
+      isBest: boolean;
+      color: string;
+      name: string;
+      isCutPortion: boolean; // true if this slice is a cut (grayed out) portion
+      isMuted: boolean; // true if the segment audio is muted
+    }> = [];
 
-      return {
-        ...seg,
-        left,
-        width,
-        index,
-        duration,
-        startTime: currentStart - duration
-      };
+    segments.forEach((seg, index) => {
+      if (!seg.cuts || seg.cuts.length === 0) {
+        // No cuts - render as single segment
+        const duration = seg.range.end - seg.range.start;
+        const width = Math.max(duration * zoomLevel, 20);
+        result.push({
+          id: `${seg.id}-full`,
+          segmentId: seg.id,
+          clipId: seg.clipId,
+          left: currentLeft,
+          width,
+          index,
+          duration,
+          range: seg.range,
+          isBest: seg.isBest,
+          color: seg.color,
+          name: seg.name,
+          isCutPortion: false,
+          isMuted: !!seg.isMuted
+        });
+        currentLeft += width;
+      } else {
+        // Has cuts - split into slices (normal parts + cut parts)
+        const sortedCuts = [...seg.cuts].sort((a, b) => a.start - b.start);
+        let currentTime = seg.range.start;
+        let sliceIndex = 0;
+
+        for (const cut of sortedCuts) {
+          // Add normal portion before cut
+          if (cut.start > currentTime) {
+            const sliceDuration = cut.start - currentTime;
+            const width = Math.max(sliceDuration * zoomLevel, 5);
+            result.push({
+              id: `${seg.id}-${sliceIndex}`,
+              segmentId: seg.id,
+              clipId: seg.clipId,
+              left: currentLeft,
+              width,
+              index,
+              duration: sliceDuration,
+              range: { start: currentTime, end: cut.start },
+              isBest: seg.isBest,
+              color: seg.color,
+              name: seg.name,
+              isCutPortion: false,
+              isMuted: !!seg.isMuted
+            });
+            currentLeft += width;
+            sliceIndex++;
+          }
+
+          // Add the cut portion (grayed out)
+          const cutDuration = cut.end - cut.start;
+          const cutWidth = Math.max(cutDuration * zoomLevel, 5);
+          result.push({
+            id: `${seg.id}-cut-${sliceIndex}`,
+            segmentId: seg.id,
+            clipId: seg.clipId,
+            left: currentLeft,
+            width: cutWidth,
+            index,
+            duration: cutDuration,
+            range: { start: cut.start, end: cut.end },
+            isBest: seg.isBest,
+            color: seg.color,
+            name: seg.name,
+            isCutPortion: true, // This is a cut portion
+            isMuted: !!seg.isMuted
+          });
+          currentLeft += cutWidth;
+          sliceIndex++;
+          currentTime = cut.end;
+        }
+
+        // Add normal portion after last cut
+        if (currentTime < seg.range.end) {
+          const sliceDuration = seg.range.end - currentTime;
+          const width = Math.max(sliceDuration * zoomLevel, 5);
+          result.push({
+            id: `${seg.id}-${sliceIndex}`,
+            segmentId: seg.id,
+            clipId: seg.clipId,
+            left: currentLeft,
+            width,
+            index,
+            duration: sliceDuration,
+            range: { start: currentTime, end: seg.range.end },
+            isBest: seg.isBest,
+            color: seg.color,
+            name: seg.name,
+            isCutPortion: false,
+            isMuted: !!seg.isMuted
+          });
+          currentLeft += width;
+        }
+      }
     });
+
+    return result;
   }, [segments, zoomLevel]);
 
   const totalWidth = Math.max(totalDuration * zoomLevel, 100);
+
+  // Debug: log when segments with cuts change
+  useEffect(() => {
+    const segsWithCuts = segments.filter(s => s.cuts && s.cuts.length > 0);
+    if (segsWithCuts.length > 0) {
+      console.log(`[Timeline] ${segsWithCuts.length} segments have cuts:`, segsWithCuts.map(s => ({
+        id: s.id,
+        cuts: s.cuts
+      })));
+    }
+  }, [segments]);
 
   // Handle seek
   const handleSeek = (e: React.MouseEvent) => {
@@ -79,13 +202,16 @@ const Timeline: React.FC<TimelineProps> = ({
       startX: e.clientX,
       originalLeft: seg.left,
       originalWidth: seg.width,
-      segmentIndex: seg.index
+      segmentIndex: seg.index,
+      resizeCommitted: false,
+      originalStart: seg.range.start,
+      originalEnd: seg.range.end
     });
     onSelectSegment(seg.id);
   }, [onSelectSegment]);
 
-  // Resize start
-  const handleResizeStart = useCallback((e: React.MouseEvent, seg: typeof renderedSegments[0], side: 'left' | 'right') => {
+  // Resize start (local handler)
+  const handleResizeStartLocal = useCallback((e: React.MouseEvent, seg: typeof renderedSegments[0], side: 'left' | 'right') => {
     e.stopPropagation();
     e.preventDefault();
 
@@ -95,7 +221,10 @@ const Timeline: React.FC<TimelineProps> = ({
       startX: e.clientX,
       originalLeft: seg.left,
       originalWidth: seg.width,
-      segmentIndex: seg.index
+      segmentIndex: seg.index,
+      resizeCommitted: false,
+      originalStart: seg.range.start,
+      originalEnd: seg.range.end
     });
     onSelectSegment(seg.id);
   }, [onSelectSegment]);
@@ -138,33 +267,45 @@ const Timeline: React.FC<TimelineProps> = ({
     if (dragState.type === 'move' && dropTargetIndex !== null) {
       onReorderSegments(dragState.segmentIndex, dropTargetIndex);
     } else if (dragState.type === 'resize-left' || dragState.type === 'resize-right') {
-      // Resize handled in real-time
+      // Commit resize to history if actual resize happened
+      if (dragState.resizeCommitted) {
+        onResizeEnd();
+      }
     }
 
     setDragState(null);
     setDropTargetIndex(null);
-  }, [dragState, dropTargetIndex, onReorderSegments]);
+  }, [dragState, dropTargetIndex, onReorderSegments, onResizeEnd]);
 
   // Handle resize drag
   const handleResizeDrag = useCallback((e: MouseEvent) => {
     if (!dragState || (dragState.type !== 'resize-left' && dragState.type !== 'resize-right')) return;
 
-    const seg = segments.find(s => s.id === dragState.segmentId);
-    if (!seg) return;
-
     const deltaX = e.clientX - dragState.startX;
+
+    // Check minimum movement threshold for smoother feel
+    if (Math.abs(deltaX) < MIN_RESIZE_DELTA && !dragState.resizeCommitted) {
+      return;
+    }
+
+    // Call onResizeStart only once when actual resize begins
+    if (!dragState.resizeCommitted) {
+      onResizeStart();
+      setDragState(prev => prev ? { ...prev, resizeCommitted: true } : null);
+    }
+
     const deltaTime = deltaX / zoomLevel;
 
     if (dragState.type === 'resize-left') {
-      const newStart = Math.max(0, seg.range.start + deltaTime);
-      if (newStart < seg.range.end - 0.1) {
-        onResizeSegment(seg.id, newStart, seg.range.end);
+      const newStart = Math.max(0, dragState.originalStart + deltaTime);
+      if (newStart < dragState.originalEnd - 0.1) {
+        onResizeSegment(dragState.segmentId!, newStart, dragState.originalEnd);
       }
     } else {
-      const newEnd = Math.max(seg.range.start + 0.1, seg.range.end + deltaTime);
-      onResizeSegment(seg.id, seg.range.start, newEnd);
+      const newEnd = Math.max(dragState.originalStart + 0.1, dragState.originalEnd + deltaTime);
+      onResizeSegment(dragState.segmentId!, dragState.originalStart, newEnd);
     }
-  }, [dragState, segments, zoomLevel, onResizeSegment]);
+  }, [dragState, zoomLevel, onResizeSegment, onResizeStart]);
 
   // Global mouse events for drag
   React.useEffect(() => {
@@ -247,6 +388,7 @@ const Timeline: React.FC<TimelineProps> = ({
                     width: `${seg.width}px`,
                     backgroundColor: seg.color || '#3f3f46',
                     opacity: seg.isBest ? 1 : 0.65,
+                    filter: seg.isCutPortion ? 'brightness(0.4)' : seg.isMuted ? 'saturate(0.3) brightness(0.7)' : 'none',
                     cursor: dragState ? 'grabbing' : 'grab'
                   }}
                   onMouseDown={(e) => handleDragStart(e, seg)}
@@ -254,27 +396,52 @@ const Timeline: React.FC<TimelineProps> = ({
                     e.stopPropagation();
                     if (!dragState) onSelectSegment(seg.id);
                   }}
-                  title={seg.name}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    if (onToggleMute) onToggleMute(seg.segmentId);
+                  }}
+                  title={seg.isMuted ? `[已剪切] ${seg.name}` : seg.isCutPortion ? `[已剪切] ${seg.name}` : seg.name}
                 >
-                    {/* Left Resize Handle */}
-                    <div
-                      className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-40 group-hover:bg-white/10"
-                      onMouseDown={(e) => handleResizeStart(e, seg, 'left')}
-                    />
+                    {/* Left Resize Handle - only for non-cut portions */}
+                    {!seg.isCutPortion && (
+                      <div
+                        className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-40 group-hover:bg-white/10"
+                        onMouseDown={(e) => handleResizeStartLocal(e, seg, 'left')}
+                      />
+                    )}
 
-                    {/* Right Resize Handle */}
-                    <div
-                      className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-40 group-hover:bg-white/10"
-                      onMouseDown={(e) => handleResizeStart(e, seg, 'right')}
-                    />
+                    {/* Right Resize Handle - only for non-cut portions */}
+                    {!seg.isCutPortion && (
+                      <div
+                        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 z-40 group-hover:bg-white/10"
+                        onMouseDown={(e) => handleResizeStartLocal(e, seg, 'right')}
+                      />
+                    )}
 
                     {/* Content */}
                     <div className="p-2 h-full flex flex-col justify-start relative pointer-events-none">
-                        <div className="absolute inset-0 opacity-10 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNCIgaGVpZ2h0PSI0IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxwYXRoIGQ9Ik0wIDNoNHYxSDB6IiBmaWxsPSIjMDAwIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiLz48L3N2Zz4=')]"></div>
-
-                        <span className="text-[10px] text-white/90 truncate font-medium drop-shadow-md z-10">
-                            {seg.name}
-                        </span>
+                        {seg.isCutPortion ? (
+                          <>
+                            {/* Strikethrough line for cut portions */}
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <div className="w-full h-0.5 bg-zinc-500"></div>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="absolute inset-0 opacity-10 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNCIgaGVpZ2h0PSI0IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxwYXRoIGQ9Ik0wIDNoNHYxSDB6IiBmaWxsPSIjMDAwIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiLz48L3N2Zz4=')]"></div>
+                            <div className="flex items-center gap-1 z-10">
+                              {seg.isMuted && (
+                                <svg className="w-3 h-3 text-zinc-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z"/>
+                                </svg>
+                              )}
+                              <span className="text-[10px] text-white/90 truncate font-medium drop-shadow-md">
+                                  {seg.name}
+                              </span>
+                            </div>
+                          </>
+                        )}
                     </div>
                 </div>
               ))}

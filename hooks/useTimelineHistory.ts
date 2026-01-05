@@ -56,10 +56,10 @@ export const useTimelineHistory = (initialState: TimelineSegment[]) => {
     newStateOrUpdater: TimelineSegment[] | ((prev: TimelineSegment[]) => TimelineSegment[])
   ) => {
     setHistory(curr => {
-      const newState = typeof newStateOrUpdater === 'function' 
-        ? newStateOrUpdater(curr.present) 
+      const newState = typeof newStateOrUpdater === 'function'
+        ? newStateOrUpdater(curr.present)
         : newStateOrUpdater;
-      
+
       return {
         past: [...curr.past, curr.present],
         present: newState,
@@ -68,9 +68,36 @@ export const useTimelineHistory = (initialState: TimelineSegment[]) => {
     });
   }, []);
 
+  // Update without pushing to history (for live dragging)
+  const setSegmentsNoHistory = useCallback((
+    newStateOrUpdater: TimelineSegment[] | ((prev: TimelineSegment[]) => TimelineSegment[])
+  ) => {
+    setHistory(curr => {
+      const newState = typeof newStateOrUpdater === 'function'
+        ? newStateOrUpdater(curr.present)
+        : newStateOrUpdater;
+
+      return {
+        ...curr,
+        present: newState
+      };
+    });
+  }, []);
+
+  // Commit current state to history (call after drag ends)
+  const commitToHistory = useCallback((stateBeforeDrag: TimelineSegment[]) => {
+    setHistory(curr => ({
+      past: [...curr.past, stateBeforeDrag],
+      present: curr.present,
+      future: []
+    }));
+  }, []);
+
   return {
     segments: history.present,
     setSegments,
+    setSegmentsNoHistory,
+    commitToHistory,
     undo,
     redo,
     canUndo,

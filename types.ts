@@ -3,6 +3,19 @@ export interface TimeRange {
   end: number;   // seconds
 }
 
+export interface WordTimestamp {
+  word: string;
+  start: number;
+  end: number;
+}
+
+export interface TranscriptWord extends WordTimestamp {
+  id: string;
+  text: string;
+  isDeleted?: boolean;
+  isFiller?: boolean;
+}
+
 export interface AnalyzedSegment {
   text: string;
   start: number;
@@ -10,6 +23,7 @@ export interface AnalyzedSegment {
   groupId: string;
   score: number;
   isBest: boolean;
+  words?: WordTimestamp[];
 }
 
 export interface ClipAnalysis {
@@ -42,6 +56,9 @@ export interface TimelineSegment {
   color: string;
   name: string;
   transcript?: string;
+  words?: WordTimestamp[];
+  cuts?: TimeRange[]; // Time ranges within the segment that are cut/excluded
+  isMuted?: boolean; // Whether the segment audio is muted
 }
 
 export enum ProcessingStatus {

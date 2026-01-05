@@ -16,6 +16,7 @@ interface TranscriptEditorProps {
   onSeek: (time: number) => void;
   onUpdateSegmentWords: (segmentId: string, words: TranscriptWord[]) => void;
   onDeleteSegment: (segmentId: string) => void;
+  onCutWords?: (segmentId: string, cutStart: number, cutEnd: number) => void;
 }
 
 // Generate word-level data from transcript text
@@ -52,6 +53,7 @@ const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
   onSeek,
   onUpdateSegmentWords,
   onDeleteSegment,
+  onCutWords,
 }) => {
   const [selectedWords, setSelectedWords] = useState<Set<string>>(new Set());
   const [selectionStart, setSelectionStart] = useState<string | null>(null);
@@ -389,6 +391,38 @@ const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
           <span className="text-sm text-blue-300">
             {selectedWords.size} word{selectedWords.size > 1 ? 's' : ''} selected
           </span>
+          {/* Cut/Scissors button */}
+          {onCutWords && (
+            <button
+              onClick={() => {
+                // Find selected words and their time range
+                const selectedWordsList = allWords.filter(w => selectedWords.has(w.id));
+                if (selectedWordsList.length === 0) return;
+
+                // Get min/max time from selected words
+                const cutStart = Math.min(...selectedWordsList.map(w => w.start));
+                const cutEnd = Math.max(...selectedWordsList.map(w => w.end));
+
+                // Group by segment and cut
+                const segmentIds = new Set(selectedWordsList.map(w => w.segmentId));
+                segmentIds.forEach(segmentId => {
+                  const segWords = selectedWordsList.filter(w => w.segmentId === segmentId);
+                  const segCutStart = Math.min(...segWords.map(w => w.start));
+                  const segCutEnd = Math.max(...segWords.map(w => w.end));
+                  onCutWords(segmentId, segCutStart, segCutEnd);
+                });
+
+                setSelectedWords(new Set());
+              }}
+              className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-500 transition flex items-center gap-2"
+              title="Cut selected words (they will be grayed out in timeline)"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z"/>
+              </svg>
+              Cut
+            </button>
+          )}
           <button
             onClick={() => {
               // Mark as deleted
