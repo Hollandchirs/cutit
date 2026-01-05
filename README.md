@@ -1,4 +1,4 @@
-# CursorCut AI
+# Cutit AI
 
 <div align="center">
 
