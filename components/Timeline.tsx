@@ -16,8 +16,8 @@ interface TimelineProps {
   onToggleMute?: (id: string) => void;
 }
 
-// Minimum pixel movement before resize triggers
-const MIN_RESIZE_DELTA = 3;
+// Minimum pixel movement before resize triggers (lower = more sensitive)
+const MIN_RESIZE_DELTA = 2;
 
 const Timeline: React.FC<TimelineProps> = ({
   segments,
@@ -191,23 +191,54 @@ const Timeline: React.FC<TimelineProps> = ({
     onSeek(time);
   };
 
-  // Drag start for move
-  const handleDragStart = useCallback((e: React.MouseEvent, seg: typeof renderedSegments[0]) => {
+  // Mouse down - prepare for potential drag (but don't start drag yet)
+  const handleMouseDown = useCallback((e: React.MouseEvent, seg: typeof renderedSegments[0]) => {
     e.stopPropagation();
-    e.preventDefault();
+    
+    // Only start drag if it's a left mouse button
+    if (e.button !== 0) return;
+    
+    // Store initial position for drag detection
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let hasMoved = false;
+    let dragStarted = false;
 
-    setDragState({
-      type: 'move',
-      segmentId: seg.id,
-      startX: e.clientX,
-      originalLeft: seg.left,
-      originalWidth: seg.width,
-      segmentIndex: seg.index,
-      resizeCommitted: false,
-      originalStart: seg.range.start,
-      originalEnd: seg.range.end
-    });
-    onSelectSegment(seg.id);
+    const handleMove = (moveEvent: MouseEvent) => {
+      const deltaX = Math.abs(moveEvent.clientX - startX);
+      const deltaY = Math.abs(moveEvent.clientY - startY);
+      
+      // Only start drag if mouse moved more than 5px (to distinguish from click)
+      if (!dragStarted && (deltaX > 5 || deltaY > 5)) {
+        hasMoved = true;
+        dragStarted = true;
+        
+        setDragState({
+          type: 'move',
+          segmentId: seg.segmentId, // Use original segment ID
+          startX: moveEvent.clientX,
+          originalLeft: seg.left,
+          originalWidth: seg.width,
+          segmentIndex: seg.index,
+          resizeCommitted: false,
+          originalStart: seg.range.start,
+          originalEnd: seg.range.end
+        });
+        onSelectSegment(seg.segmentId); // Use original segment ID
+      }
+    };
+
+    const handleUp = () => {
+      // If mouse was released without moving, treat it as a click (select only)
+      if (!hasMoved) {
+        onSelectSegment(seg.segmentId); // Use original segment ID
+      }
+      document.removeEventListener('mousemove', handleMove);
+      document.removeEventListener('mouseup', handleUp);
+    };
+
+    document.addEventListener('mousemove', handleMove);
+    document.addEventListener('mouseup', handleUp);
   }, [onSelectSegment]);
 
   // Resize start (local handler)
@@ -217,7 +248,7 @@ const Timeline: React.FC<TimelineProps> = ({
 
     setDragState({
       type: side === 'left' ? 'resize-left' : 'resize-right',
-      segmentId: seg.id,
+      segmentId: seg.segmentId, // Use original segment ID
       startX: e.clientX,
       originalLeft: seg.left,
       originalWidth: seg.width,
@@ -226,39 +257,68 @@ const Timeline: React.FC<TimelineProps> = ({
       originalStart: seg.range.start,
       originalEnd: seg.range.end
     });
-    onSelectSegment(seg.id);
+    onSelectSegment(seg.segmentId); // Use original segment ID
   }, [onSelectSegment]);
 
-  // Handle mouse move
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!dragState || !containerRef.current) return;
+  // Handle mouse move during drag
+  const handleGlobalMouseMove = useCallback((e: MouseEvent) => {
+    if (!dragState || dragState.type !== 'move' || !containerRef.current) return;
 
-    const deltaX = e.clientX - dragState.startX;
-    const deltaTime = deltaX / zoomLevel;
+    // Calculate mouse position relative to timeline container
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const currentX = e.clientX - containerRect.left + containerRef.current.scrollLeft;
+    
+    const draggedOriginalIndex = dragState.segmentIndex; // Original segment index
+    let targetOriginalIndex = draggedOriginalIndex; // Default to current position
+    let accumulatedWidth = 0;
+    let foundTarget = false;
 
-    if (dragState.type === 'move') {
-      // Calculate which position to drop at
-      const currentX = e.clientX - containerRef.current.getBoundingClientRect().left + containerRef.current.scrollLeft;
-      let accumulatedWidth = 0;
-      let targetIndex = renderedSegments.length;
-
-      for (let i = 0; i < renderedSegments.length; i++) {
-        const midpoint = accumulatedWidth + renderedSegments[i].width / 2;
-        if (currentX < midpoint) {
-          targetIndex = i;
-          break;
-        }
-        accumulatedWidth += renderedSegments[i].width;
+    // Find insertion point by checking each rendered segment
+    // Note: renderedSegments can have multiple visual segments per original segment (due to cuts)
+    for (let i = 0; i < renderedSegments.length; i++) {
+      const seg = renderedSegments[i];
+      const segOriginalIndex = seg.index; // Original segment index
+      
+      // Skip visual segments that belong to the dragged original segment
+      if (segOriginalIndex === draggedOriginalIndex) {
+        accumulatedWidth += seg.width;
+        continue;
       }
-
-      // Adjust for dragging from original position
-      if (targetIndex > dragState.segmentIndex) {
-        targetIndex = Math.max(0, targetIndex);
+      
+      const segmentStart = accumulatedWidth;
+      const segmentEnd = accumulatedWidth + seg.width;
+      
+      // Check if mouse is in this segment's range
+      if (currentX >= segmentStart && currentX <= segmentEnd) {
+        // Determine if we should insert before or after this original segment
+        const midpoint = segmentStart + seg.width / 2;
+        targetOriginalIndex = currentX < midpoint ? segOriginalIndex : segOriginalIndex + 1;
+        foundTarget = true;
+        break;
       }
-
-      setDropTargetIndex(targetIndex !== dragState.segmentIndex ? targetIndex : null);
+      
+      // If mouse is before this segment, insert at this original index
+      if (currentX < segmentStart) {
+        targetOriginalIndex = segOriginalIndex;
+        foundTarget = true;
+        break;
+      }
+      
+      accumulatedWidth += seg.width;
     }
-  }, [dragState, zoomLevel, renderedSegments]);
+    
+    // If we've passed all segments, insert at the end
+    if (!foundTarget && currentX > accumulatedWidth) {
+      targetOriginalIndex = segments.length;
+    }
+
+    // Only set drop target if it's different from current position
+    if (targetOriginalIndex !== draggedOriginalIndex && targetOriginalIndex >= 0 && targetOriginalIndex <= segments.length) {
+      setDropTargetIndex(targetOriginalIndex);
+    } else {
+      setDropTargetIndex(null);
+    }
+  }, [dragState, renderedSegments, segments.length]);
 
   // Handle mouse up
   const handleMouseUp = useCallback(() => {
@@ -313,6 +373,8 @@ const Timeline: React.FC<TimelineProps> = ({
       const handleGlobalMove = (e: MouseEvent) => {
         if (dragState.type === 'resize-left' || dragState.type === 'resize-right') {
           handleResizeDrag(e);
+        } else if (dragState.type === 'move') {
+          handleGlobalMouseMove(e);
         }
       };
       const handleGlobalUp = () => handleMouseUp();
@@ -325,7 +387,7 @@ const Timeline: React.FC<TimelineProps> = ({
         window.removeEventListener('mouseup', handleGlobalUp);
       };
     }
-  }, [dragState, handleMouseUp, handleResizeDrag]);
+  }, [dragState, handleMouseUp, handleResizeDrag, handleGlobalMouseMove]);
 
   return (
     <div className="h-64 border-t border-zinc-800 bg-zinc-900 flex flex-col select-none">
@@ -340,8 +402,6 @@ const Timeline: React.FC<TimelineProps> = ({
         onClick={(e) => {
             if (e.target === e.currentTarget) onSelectSegment(null);
         }}
-        onMouseMove={dragState?.type === 'move' ? handleMouseMove : undefined}
-        onMouseUp={dragState?.type === 'move' ? handleMouseUp : undefined}
         onMouseLeave={dragState?.type === 'move' ? handleMouseUp : undefined}
       >
         <div
@@ -363,15 +423,23 @@ const Timeline: React.FC<TimelineProps> = ({
             </div>
 
             {/* Drop Indicator */}
-            {dropTargetIndex !== null && (
-              <div
-                className="absolute top-8 bottom-8 w-1 bg-blue-500 z-40 rounded"
-                style={{
-                  left: dropTargetIndex === 0 ? 0 :
-                    renderedSegments.slice(0, dropTargetIndex).reduce((sum, s) => sum + s.width, 0) - 2
-                }}
-              />
-            )}
+            {dropTargetIndex !== null && (() => {
+              // Calculate visual position for drop indicator based on original segment index
+              // Find the first rendered segment with index >= dropTargetIndex
+              let dropLeft = 0;
+              for (const seg of renderedSegments) {
+                if (seg.index >= dropTargetIndex) {
+                  break;
+                }
+                dropLeft += seg.width;
+              }
+              return (
+                <div
+                  className="absolute top-8 bottom-8 w-1 bg-blue-500 z-40 rounded"
+                  style={{ left: Math.max(0, dropLeft - 2) }}
+                />
+              );
+            })()}
 
             {/* Segments Track */}
             <div className="absolute top-8 left-0 right-0 h-24">
@@ -380,8 +448,8 @@ const Timeline: React.FC<TimelineProps> = ({
                   key={seg.id}
                   className={`
                     absolute top-0 bottom-0 overflow-hidden group rounded-sm z-20 transition-shadow
-                    ${selectedSegmentId === seg.id ? 'ring-2 ring-white z-30' : 'hover:brightness-110'}
-                    ${dragState?.segmentId === seg.id && dragState.type === 'move' ? 'opacity-50' : ''}
+                    ${selectedSegmentId === seg.segmentId ? 'ring-2 ring-white z-30' : 'hover:brightness-110'}
+                    ${dragState?.segmentId === seg.segmentId && dragState.type === 'move' ? 'opacity-50' : ''}
                   `}
                   style={{
                     left: `${seg.left}px`,
@@ -391,10 +459,10 @@ const Timeline: React.FC<TimelineProps> = ({
                     filter: seg.isCutPortion ? 'brightness(0.4)' : seg.isMuted ? 'saturate(0.3) brightness(0.7)' : 'none',
                     cursor: dragState ? 'grabbing' : 'grab'
                   }}
-                  onMouseDown={(e) => handleDragStart(e, seg)}
+                  onMouseDown={(e) => handleMouseDown(e, seg)}
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (!dragState) onSelectSegment(seg.id);
+                    // Click is handled in handleMouseDown if no drag occurred
                   }}
                   onDoubleClick={(e) => {
                     e.stopPropagation();

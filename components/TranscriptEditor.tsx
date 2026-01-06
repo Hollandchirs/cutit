@@ -350,35 +350,50 @@ const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
 
               {/* Words */}
               <div className="leading-relaxed text-lg">
-                {words.map((word) => (
-                  <span
-                    key={word.id}
-                    ref={currentWordId === word.id ? activeWordRef : null}
-                    onClick={(e) => handleWordClick(word, e)}
-                    onMouseDown={(e) => handleMouseDown(word, e)}
-                    onMouseEnter={() => handleMouseEnter(word)}
-                    className={`
-                      inline cursor-pointer transition-all duration-150 rounded px-0.5 mx-0.5
-                      ${word.isDeleted
-                        ? 'line-through text-zinc-600 bg-zinc-800/50 opacity-50'
-                        : word.isFiller
-                          ? 'text-amber-400/80 bg-amber-500/10'
-                          : 'text-zinc-200 hover:bg-zinc-800'
-                      }
-                      ${selectedWords.has(word.id)
-                        ? 'bg-blue-600/40 text-white ring-1 ring-blue-500'
-                        : ''
-                      }
-                      ${currentWordId === word.id && !word.isDeleted
-                        ? 'bg-green-600/30 text-green-300 ring-1 ring-green-500'
-                        : ''
-                      }
-                    `}
-                    title={word.isFiller ? 'Filler word' : undefined}
-                  >
-                    {word.text}
-                  </span>
-                ))}
+                {words.map((word) => {
+                  // Check if word is in a cut range
+                  const isInCut = segment.cuts?.some(cut => 
+                    word.start >= cut.start && word.end <= cut.end
+                  ) || false;
+                  
+                  // Word is deleted if marked as deleted OR in a cut range
+                  const isWordDeleted = word.isDeleted || isInCut;
+                  
+                  return (
+                    <span
+                      key={word.id}
+                      ref={currentWordId === word.id ? activeWordRef : null}
+                      onClick={(e) => handleWordClick(word, e)}
+                      onMouseDown={(e) => handleMouseDown(word, e)}
+                      onMouseEnter={() => handleMouseEnter(word)}
+                      className={`
+                        inline cursor-pointer transition-colors rounded px-0.5 mx-0.5
+                        ${isWordDeleted
+                          ? 'line-through text-zinc-600 bg-zinc-800/50 opacity-50'
+                          : word.isFiller
+                            ? 'text-amber-400/80 bg-amber-500/10'
+                            : 'text-zinc-200 hover:bg-zinc-800'
+                        }
+                        ${selectedWords.has(word.id)
+                          ? 'bg-blue-600/40 text-white ring-1 ring-blue-500'
+                          : ''
+                        }
+                        ${currentWordId === word.id && !isWordDeleted
+                          ? 'bg-green-600/30 text-green-300 ring-1 ring-green-500'
+                          : ''
+                        }
+                      `}
+                      style={{
+                        // Prevent layout shift on hover
+                        display: 'inline-block',
+                        minWidth: '0.1em'
+                      }}
+                      title={word.isFiller ? 'Filler word' : isInCut ? 'Cut (will be excluded from export)' : undefined}
+                    >
+                      {word.text}
+                    </span>
+                  );
+                })}
               </div>
             </div>
           ))}

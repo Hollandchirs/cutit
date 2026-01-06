@@ -114,6 +114,7 @@ export default function App() {
   }, [commitToHistory]);
 
   // Handle cutting words from transcript - adds cut range to segment (visual + export)
+  // IMPORTANT: This preserves the transcript text, only marks the time range as cut
   const handleCutWords = useCallback((segmentId: string, cutStart: number, cutEnd: number) => {
     console.log(`[App] handleCutWords called: segmentId=${segmentId}, cutStart=${cutStart.toFixed(2)}, cutEnd=${cutEnd.toFixed(2)}`);
 
@@ -122,19 +123,48 @@ export default function App() {
         if (seg.id !== segmentId) return seg;
 
         // Clamp cut times to segment range
-        const clampedCutStart = Math.max(seg.range.start, cutStart);
-        const clampedCutEnd = Math.min(seg.range.end, cutEnd);
+        const clampedCutStart = Math.max(seg.range.start, Math.min(cutStart, seg.range.end));
+        const clampedCutEnd = Math.min(seg.range.end, Math.max(cutEnd, seg.range.start));
+        
+        // Ensure cut is valid (start < end and has minimum duration)
+        if (clampedCutStart >= clampedCutEnd || clampedCutEnd - clampedCutStart < 0.1) {
+          console.warn(`[App] Invalid cut range: ${clampedCutStart.toFixed(2)}s - ${clampedCutEnd.toFixed(2)}s`);
+          return seg;
+        }
 
         // Add cut range to segment's cuts array
+        // The transcript text is preserved - cuts only affect visual display and export
         const existingCuts = seg.cuts || [];
         const newCut = { start: clampedCutStart, end: clampedCutEnd };
 
+        // Merge overlapping cuts
+        const allCuts = [...existingCuts, newCut].sort((a, b) => a.start - b.start);
+        const mergedCuts: typeof allCuts = [];
+        
+        for (const cut of allCuts) {
+          if (mergedCuts.length === 0) {
+            mergedCuts.push(cut);
+          } else {
+            const lastCut = mergedCuts[mergedCuts.length - 1];
+            // If overlaps or adjacent, merge
+            if (cut.start <= lastCut.end) {
+              lastCut.end = Math.max(lastCut.end, cut.end);
+            } else {
+              mergedCuts.push(cut);
+            }
+          }
+        }
+
         console.log(`[App] Adding cut to segment: ${clampedCutStart.toFixed(2)}s - ${clampedCutEnd.toFixed(2)}s`);
-        console.log(`[App] Segment now has ${existingCuts.length + 1} cuts`);
+        console.log(`[App] Segment now has ${mergedCuts.length} cuts (merged from ${allCuts.length})`);
+        console.log(`[App] Transcript preserved: "${seg.transcript?.substring(0, 50)}..."`);
 
         return {
           ...seg,
-          cuts: [...existingCuts, newCut]
+          cuts: mergedCuts,
+          // Transcript and words are preserved - they are NOT deleted
+          transcript: seg.transcript,
+          words: seg.words
         };
       });
       return newSegments;
@@ -273,19 +303,29 @@ export default function App() {
             colorIndex++;
           }
 
-          newSegments.push({
+          // Check if this is a silent segment (no words or text is "[静音]")
+          const isSilent = !seg.words || seg.words.length === 0 || seg.text.trim() === '[静音]' || seg.text.trim().startsWith('[静音]');
+          
+          // For duplicate segments (not best) or silent segments, add cut to show as dark
+          const shouldAutoCut = isSilent || (!seg.isBest && seg.groupId !== 'default');
+          
+          const segmentData: TimelineSegment = {
             id: generateId(),
             clipId: clip.id,
             range: { start: seg.start, end: seg.end },
-            isBest: seg.isBest,
+            isBest: isSilent ? false : seg.isBest, // Silent segments are not "best"
             score: seg.score,
-            color: groupColors[seg.groupId],
+            color: isSilent ? '#4a4a4a' : groupColors[seg.groupId], // Gray color for silence
             name: clip.name,
             transcript: seg.text,
-            words: seg.words
-          });
+            words: seg.words,
+            // Auto-add cut for duplicates and silence to show as dark/strikethrough
+            cuts: shouldAutoCut ? [{ start: seg.start, end: seg.end }] : undefined
+          };
 
-          const status = seg.isBest ? '✓ Best' : '✗ Dup';
+          newSegments.push(segmentData);
+
+          const status = isSilent ? '🔇 Silent' : seg.isBest ? '✓ Best' : '✗ Dup';
           console.log(`  [${idx}] ${status} | ${seg.start.toFixed(2)}s-${seg.end.toFixed(2)}s | group=${seg.groupId} | "${seg.text.substring(0, 30)}..."`);
         });
 
@@ -378,6 +418,7 @@ export default function App() {
         }
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
         handleDelete();
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'b') {

@@ -175,7 +175,8 @@ const groupChunksIntoSegments = (chunks: any[]): WhisperSegment[] => {
   const MAX_SEGMENT_DURATION = 15; // seconds - max segment length
 
   for (const chunk of chunks) {
-    const word = chunk.text?.trim();
+    // Only trim leading/trailing spaces, preserve all characters (e.g., "SOP" should not lose "O")
+    const word = chunk.text ? chunk.text.replace(/^\s+|\s+$/g, '') : '';
     if (!word) continue;
 
     const [start, end] = chunk.timestamp || [0, 0];

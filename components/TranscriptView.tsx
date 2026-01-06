@@ -30,6 +30,7 @@ const TranscriptView: React.FC<TranscriptViewProps> = ({
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
   const [selectedWordIds, setSelectedWordIds] = useState<Set<string>>(new Set());
   const [wordSelectionStart, setWordSelectionStart] = useState<string | null>(null);
+  const [textSelection, setTextSelection] = useState<{ segmentId: string; startOffset: number; endOffset: number; rect: DOMRect } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef<number | null>(null);
   const activeWordRef = useRef<HTMLSpanElement>(null);
@@ -86,6 +87,13 @@ const TranscriptView: React.FC<TranscriptViewProps> = ({
       }
     };
   }, []);
+
+  // Handle drag start on icon - make it directly draggable
+  const handleIconMouseDown = useCallback((e: React.MouseEvent, index: number) => {
+    e.stopPropagation();
+    // Don't prevent default - allow native drag to work
+  }, []);
+
 
   const handleDragStart = useCallback((e: React.DragEvent, index: number) => {
     e.dataTransfer.effectAllowed = 'move';
@@ -203,7 +211,7 @@ const TranscriptView: React.FC<TranscriptViewProps> = ({
     }
   }, [selectedWordIds, wordSelectionStart]);
 
-  // Handle cut words
+  // Handle cut words from word selection
   const handleCutSelectedWords = useCallback((segment: TimelineSegment, words: (WordTimestamp & { id: string })[]) => {
     if (!onCutWords || selectedWordIds.size === 0) return;
 
@@ -216,6 +224,108 @@ const TranscriptView: React.FC<TranscriptViewProps> = ({
     onCutWords(segment.id, cutStart, cutEnd);
     setSelectedWordIds(new Set());
   }, [onCutWords, selectedWordIds]);
+
+  // Handle cut from text selection
+  const handleCutTextSelection = useCallback((segment: TimelineSegment, words: (WordTimestamp & { id: string })[]) => {
+    if (!onCutWords || !textSelection || textSelection.segmentId !== segment.id) return;
+
+    // Reconstruct segment text from words to match displayed text
+    const segmentText = words.map(w => w.word).join(' ');
+    
+    // Find words that overlap with the text selection
+    let startWordIndex = -1;
+    let endWordIndex = -1;
+    let charCount = 0;
+    
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
+      const wordLength = word.word.length;
+      const wordStart = charCount;
+      const wordEnd = charCount + wordLength;
+      
+      // Check if selection overlaps with this word
+      if (startWordIndex === -1 && textSelection.endOffset > wordStart && textSelection.startOffset < wordEnd) {
+        startWordIndex = i;
+      }
+      
+      if (textSelection.startOffset < wordEnd && textSelection.endOffset > wordStart) {
+        endWordIndex = i;
+      }
+      
+      charCount += wordLength;
+      // Add space if not last word
+      if (i < words.length - 1) charCount += 1;
+    }
+    
+    if (startWordIndex >= 0 && endWordIndex >= 0 && startWordIndex <= endWordIndex) {
+      const startWord = words[startWordIndex];
+      const endWord = words[endWordIndex];
+      onCutWords(segment.id, startWord.start, endWord.end);
+    }
+    
+    setTextSelection(null);
+    // Clear text selection
+    window.getSelection()?.removeAllRanges();
+  }, [onCutWords, textSelection]);
+
+  // Handle text selection
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) {
+        setTextSelection(null);
+        return;
+      }
+
+      const range = selection.getRangeAt(0);
+      const selectedText = selection.toString().trim();
+      
+      if (selectedText.length === 0) {
+        setTextSelection(null);
+        return;
+      }
+
+      // Find which segment contains this selection
+      for (const segment of segments) {
+        const segmentElement = document.querySelector(`[data-segment-id="${segment.id}"]`);
+        if (segmentElement && segmentElement.contains(range.commonAncestorContainer)) {
+          // Calculate offset within segment text (reconstructed from words)
+          const segmentTextElement = segmentElement.querySelector('.segment-text');
+          if (segmentTextElement) {
+            // Reconstruct text from words (with spaces)
+            const words = getSegmentWords(segment);
+            const segmentText = words.map(w => w.word).join(' ');
+            
+            // Calculate offsets in the displayed text
+            const preRange = document.createRange();
+            preRange.selectNodeContents(segmentTextElement);
+            preRange.setEnd(range.startContainer, range.startOffset);
+            const startOffset = preRange.toString().length;
+            
+            preRange.setEnd(range.endContainer, range.endOffset);
+            const endOffset = preRange.toString().length;
+            
+            // Only show scissors if selection is within this segment's text
+            if (startOffset >= 0 && endOffset <= segmentText.length && endOffset > startOffset) {
+              const rect = range.getBoundingClientRect();
+              setTextSelection({
+                segmentId: segment.id,
+                startOffset,
+                endOffset,
+                rect
+              });
+              return;
+            }
+          }
+        }
+      }
+      
+      setTextSelection(null);
+    };
+
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
+  }, [segments, getSegmentWords]);
 
   if (segments.length === 0) {
     return (
@@ -261,18 +371,27 @@ const TranscriptView: React.FC<TranscriptViewProps> = ({
         return (
           <div
             key={segment.id}
-            draggable
-            onDragStart={(e) => handleDragStart(e, index)}
-            onDragOver={(e) => handleDragOver(e, index)}
+            data-segment-id={segment.id}
+            onDragOver={(e) => {
+              if (dragIndex !== null) {
+                handleDragOver(e, index);
+              }
+            }}
             onDragEnd={handleDragEnd}
             onDragLeave={handleDragLeave}
-            onClick={(e) => handleSegmentClick(segment, index, e)}
+            onClick={(e) => {
+              // Don't select segment if clicking on text or text is selected
+              const selection = window.getSelection();
+              if (!selection || selection.toString().length === 0) {
+                handleSegmentClick(segment, index, e);
+              }
+            }}
             onDoubleClick={(e) => {
               e.stopPropagation();
               if (onToggleMute) onToggleMute(segment.id);
             }}
             className={`
-              relative group rounded-md transition-all cursor-pointer
+              relative group rounded-md transition-all
               ${isSelected
                 ? 'bg-zinc-800 ring-1 ring-blue-500/50'
                 : 'hover:bg-zinc-800/50'
@@ -283,7 +402,7 @@ const TranscriptView: React.FC<TranscriptViewProps> = ({
             `}
           >
             <div className="flex items-start gap-2 p-2">
-              {/* Icon - Scissors for muted/retake, Drag Handle for best */}
+              {/* Icon - Only this icon is draggable, requires long press */}
               {segment.isMuted ? (
                 <div className="flex-shrink-0 text-zinc-500 mt-0.5" title="Cut - double-click to restore">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -291,13 +410,31 @@ const TranscriptView: React.FC<TranscriptViewProps> = ({
                   </svg>
                 </div>
               ) : !segment.isBest ? (
-                <div className="flex-shrink-0 text-zinc-500 mt-0.5" title="Retake - double-click to cut">
+                <div 
+                  className="flex-shrink-0 text-zinc-500 mt-0.5 cursor-grab active:cursor-grabbing" 
+                  title="Retake - drag icon to reorder, double-click to cut"
+                  draggable
+                  onMouseDown={(e) => handleIconMouseDown(e, index)}
+                  onDragStart={(e) => {
+                    e.stopPropagation();
+                    handleDragStart(e, index);
+                  }}
+                >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z"/>
                   </svg>
                 </div>
               ) : (
-                <div className="flex-shrink-0 cursor-grab active:cursor-grabbing text-zinc-600 hover:text-zinc-400 mt-0.5" title="Double-click to cut">
+                <div 
+                  className="flex-shrink-0 cursor-grab active:cursor-grabbing text-zinc-600 hover:text-zinc-400 mt-0.5" 
+                  title="Drag icon to reorder, double-click to cut"
+                  draggable
+                  onMouseDown={(e) => handleIconMouseDown(e, index)}
+                  onDragStart={(e) => {
+                    e.stopPropagation();
+                    handleDragStart(e, index);
+                  }}
+                >
                   <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M8 6a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm8-16a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/>
                   </svg>
@@ -317,55 +454,79 @@ const TranscriptView: React.FC<TranscriptViewProps> = ({
                   </span>
                 </div>
 
-                {/* Transcript text with real-time word highlighting - NO exploding effect */}
+                {/* Transcript text with real-time word highlighting - Support free text selection */}
                 <div className="relative">
-                  <p className={`text-xs leading-relaxed ${
-                    segment.isBest && !segment.isMuted
-                      ? 'text-zinc-300'
-                      : 'text-zinc-500 line-through decoration-zinc-500'
-                  }`}>
+                  <p 
+                    className="segment-text text-xs leading-relaxed select-text text-zinc-300"
+                  >
                     {words.map((word, wordIndex) => {
                       const isCurrentWord = currentWordId === word.id;
                       const isWordSelected = selectedWordIds.has(word.id);
-                      // Check if this is the last selected word to show scissors
-                      const selectedWordsList = words.filter(w => selectedWordIds.has(w.id));
-                      const isLastSelectedWord = selectedWordsList.length > 0 &&
-                        selectedWordsList[selectedWordsList.length - 1].id === word.id;
+                      
+                      // Check if word is in a cut range
+                      const isWordInCut = segment.cuts?.some(cut => 
+                        word.start >= cut.start && word.end <= cut.end
+                      ) || false;
+                      
+                      // Non-best segments (duplicates) - entire segment should show strikethrough
+                      const isDuplicate = !segment.isBest && !segment.isMuted;
 
                       return (
                         <span
                           key={word.id}
                           ref={isCurrentWord ? activeWordRef : null}
-                          onClick={(e) => handleWordClick(word.id, words, e)}
-                          className={`word-span inline cursor-pointer transition-all ${
+                          className={`word-span inline transition-colors ${
                             isCurrentWord
                               ? 'text-green-400 font-medium'
                               : isWordSelected
                                 ? 'bg-blue-600/40 text-white rounded px-0.5'
-                                : ''
+                                : isWordInCut
+                                  ? 'line-through text-zinc-600 opacity-50'
+                                  : isDuplicate
+                                    ? 'line-through text-zinc-500 opacity-70'
+                                    : 'text-zinc-300'
                           }`}
+                          style={{
+                            // Prevent layout shift on hover
+                            display: 'inline-block',
+                            minWidth: '0.1em',
+                            // Allow text selection
+                            userSelect: 'text',
+                            WebkitUserSelect: 'text'
+                          }}
                         >
                           {word.word}
                           {wordIndex < words.length - 1 ? ' ' : ''}
-                          {/* Fixed scissors button after last selected word */}
-                          {isLastSelectedWord && onCutWords && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleCutSelectedWords(segment, words);
-                              }}
-                              className="inline-flex items-center justify-center ml-1 p-1 bg-blue-600 text-white rounded shadow-lg hover:bg-blue-500 align-middle"
-                              title="剪切选中"
-                            >
-                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z"/>
-                              </svg>
-                            </button>
-                          )}
                         </span>
                       );
                     })}
                   </p>
+                  
+                  {/* Scissors button above text selection */}
+                  {textSelection && textSelection.segmentId === segment.id && onCutWords && (
+                    <div
+                      className="fixed z-50 flex items-center justify-center pointer-events-none"
+                      style={{
+                        left: `${textSelection.rect.left + textSelection.rect.width / 2}px`,
+                        top: `${textSelection.rect.top - 2}px`,
+                        transform: 'translate(-50%, -100%)'
+                      }}
+                    >
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleCutTextSelection(segment, words);
+                        }}
+                        className="flex items-center justify-center p-2 bg-blue-600 text-white rounded-lg shadow-lg hover:bg-blue-500 transition pointer-events-auto"
+                        title="剪切选中文本"
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z"/>
+                        </svg>
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
