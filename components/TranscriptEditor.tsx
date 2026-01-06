@@ -356,8 +356,8 @@ const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
                     word.start >= cut.start && word.end <= cut.end
                   ) || false;
                   
-                  // Word is deleted if marked as deleted OR in a cut range
-                  const isWordDeleted = word.isDeleted || isInCut;
+                  // Word is deleted if marked as deleted, in a cut range, or the whole segment is muted (strikethrough state)
+                  const isWordDeleted = word.isDeleted || isInCut || segment.isMuted;
                   
                   return (
                     <span

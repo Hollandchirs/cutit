@@ -468,9 +468,6 @@ const TranscriptView: React.FC<TranscriptViewProps> = ({
                         word.start >= cut.start && word.end <= cut.end
                       ) || false;
                       
-                      // Non-best segments (duplicates) - entire segment should show strikethrough
-                      const isDuplicate = !segment.isBest && !segment.isMuted;
-
                       return (
                         <span
                           key={word.id}
@@ -480,11 +477,9 @@ const TranscriptView: React.FC<TranscriptViewProps> = ({
                               ? 'text-green-400 font-medium'
                               : isWordSelected
                                 ? 'bg-blue-600/40 text-white rounded px-0.5'
-                                : isWordInCut
+                                : (segment.isMuted || isWordInCut)
                                   ? 'line-through text-zinc-600 opacity-50'
-                                  : isDuplicate
-                                    ? 'line-through text-zinc-500 opacity-70'
-                                    : 'text-zinc-300'
+                                  : 'text-zinc-300'
                           }`}
                           style={{
                             // Prevent layout shift on hover

@@ -305,22 +305,23 @@ export default function App() {
 
           // Check if this is a silent segment (no words or text is "[静音]")
           const isSilent = !seg.words || seg.words.length === 0 || seg.text.trim() === '[静音]' || seg.text.trim().startsWith('[静音]');
-          
-          // For duplicate segments (not best) or silent segments, add cut to show as dark
-          const shouldAutoCut = isSilent || (!seg.isBest && seg.groupId !== 'default');
-          
+
+          // Only mark duplicate (non-best) segments as muted/strikethrough by default
+          const isDuplicate = !seg.isBest && seg.groupId !== 'default';
+
           const segmentData: TimelineSegment = {
             id: generateId(),
             clipId: clip.id,
             range: { start: seg.start, end: seg.end },
-            isBest: isSilent ? false : seg.isBest, // Silent segments are not "best"
+            isBest: isSilent ? false : seg.isBest,
             score: seg.score,
             color: isSilent ? '#4a4a4a' : groupColors[seg.groupId], // Gray color for silence
             name: clip.name,
             transcript: seg.text,
             words: seg.words,
-            // Auto-add cut for duplicates and silence to show as dark/strikethrough
-            cuts: shouldAutoCut ? [{ start: seg.start, end: seg.end }] : undefined
+            // Duplicates default to muted (strikethrough); silent segments stay unmuted but can still be dimmed via cuts if desired later
+            isMuted: isDuplicate,
+            cuts: isSilent ? [{ start: seg.start, end: seg.end }] : undefined
           };
 
           newSegments.push(segmentData);
